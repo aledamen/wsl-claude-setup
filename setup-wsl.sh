@@ -23,19 +23,27 @@ sudo bash -c 'echo "nameserver 8.8.8.8
 nameserver 8.8.4.4" > /etc/resolv.conf'
 
 if ! grep -q "generateResolvConf = false" /etc/wsl.conf 2>/dev/null; then
-    sudo bash -c 'cat >> /etc/wsl.conf << EOF
+  sudo bash -c 'cat >> /etc/wsl.conf << EOF
 
 [network]
 generateResolvConf = false
 EOF'
 fi
 
+if ! grep -q "appendWindowsPath = false" /etc/wsl.conf 2>/dev/null; then
+  sudo bash -c 'cat >> /etc/wsl.conf << EOF
+
+[interop]
+appendWindowsPath = false
+EOF'
+fi
+
 echo "Verifying DNS..."
 if ping -c 1 registry.npmjs.org &>/dev/null; then
-    echo "DNS working"
+  echo "DNS working"
 else
-    echo "ERROR: DNS not working. Restart WSL from PowerShell with 'wsl --shutdown' and run this script again."
-    exit 1
+  echo "ERROR: DNS not working. Restart WSL from PowerShell with 'wsl --shutdown' and run this script again."
+  exit 1
 fi
 
 # ------------------------------------------
@@ -45,15 +53,15 @@ echo ""
 echo "[2/7] Installing Node.js via nvm..."
 
 if command -v node &>/dev/null; then
-    echo "Node.js already installed: $(node --version)"
+  echo "Node.js already installed: $(node --version)"
 else
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 
-    export NVM_DIR="$HOME/.nvm"
-    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+  export NVM_DIR="$HOME/.nvm"
+  [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-    nvm install --lts
-    echo "Node.js installed: $(node --version)"
+  nvm install --lts
+  echo "Node.js installed: $(node --version)"
 fi
 
 # ------------------------------------------
@@ -89,22 +97,25 @@ echo "Tavily MCP package ready"
 echo ""
 echo "[6/7] Installing Azure CLI..."
 
-if command -v az &>/dev/null; then
-    echo "Azure CLI already installed: $(az --version | head -1)"
+# Siempre priorizar ~/.local/bin antes de cualquier chequeo
+export PATH="$HOME/.local/bin:$PATH"
+if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+fi
+
+# Ignorar el az de Windows (ruta /mnt/c/...) — no puede ejecutarse en Linux
+if command -v az &>/dev/null && [[ "$(which az)" != /mnt/c/* ]]; then
+  echo "Azure CLI already installed: $(az --version | head -1)"
 else
-    sudo apt update && sudo apt install -y python3-pip
-    pip install azure-cli --break-system-packages
-
-    if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
-
-    echo "Azure CLI installed: $(az --version | head -1)"
+  sudo apt update && sudo apt install -y python3-pip
+  pip install azure-cli --break-system-packages
+  echo "Azure CLI installed: $(az --version | head -1)"
 fi
 
 echo "Installing Azure DevOps extension..."
-az extension add --name azure-devops 2>/dev/null || az extension update --name azure-devops 2>/dev/null || true
+az extension add --name azure-devops 2>/dev/null \
+  || az extension update --name azure-devops 2>/dev/null \
+  || true
 echo "Azure DevOps extension ready"
 
 # ------------------------------------------
@@ -117,37 +128,37 @@ echo ""
 read -p "Do you want to configure Azure DevOps? (y/n): " CONFIGURE_AZDO
 
 if [[ "$CONFIGURE_AZDO" == "y" || "$CONFIGURE_AZDO" == "Y" ]]; then
-    read -p "Azure DevOps URL (e.g., http://192.168.2.238/DefaultCollection or https://dev.azure.com/org): " AZDO_ORG
-    read -p "Default project name: " AZDO_PROJECT
+  read -p "Azure DevOps URL (e.g., http://192.168.2.238/DefaultCollection or https://dev.azure.com/org): " AZDO_ORG
+  read -p "Default project name: " AZDO_PROJECT
 
-    az devops configure --defaults \
-        organization="$AZDO_ORG" \
-        project="$AZDO_PROJECT"
+  az devops configure --defaults \
+    organization="$AZDO_ORG" \
+    project="$AZDO_PROJECT"
 
-    echo ""
-    echo "Generate a Personal Access Token (PAT) from:"
-    echo "  ${AZDO_ORG}/_usersSettings/tokens"
-    echo ""
-    echo "Recommended permissions: Read on Code and Release"
-    echo ""
-    read -sp "Paste your PAT here (input hidden): " AZDO_PAT
-    echo ""
+  echo ""
+  echo "Generate a Personal Access Token (PAT) from:"
+  echo "  ${AZDO_ORG}/_usersSettings/tokens"
+  echo ""
+  echo "Recommended permissions: Read on Code and Release"
+  echo ""
+  read -sp "Paste your PAT here (input hidden): " AZDO_PAT
+  echo ""
 
-    if grep -q "AZURE_DEVOPS_EXT_PAT" ~/.bashrc 2>/dev/null; then
-        sed -i "s|export AZURE_DEVOPS_EXT_PAT=.*|export AZURE_DEVOPS_EXT_PAT=\"$AZDO_PAT\"|" ~/.bashrc
-    else
-        echo "export AZURE_DEVOPS_EXT_PAT=\"$AZDO_PAT\"" >> ~/.bashrc
-    fi
-    export AZURE_DEVOPS_EXT_PAT="$AZDO_PAT"
+  if grep -q "AZURE_DEVOPS_EXT_PAT" ~/.bashrc 2>/dev/null; then
+    sed -i "s|export AZURE_DEVOPS_EXT_PAT=.*|export AZURE_DEVOPS_EXT_PAT=\"$AZDO_PAT\"|" ~/.bashrc
+  else
+    echo "export AZURE_DEVOPS_EXT_PAT=\"$AZDO_PAT\"" >> ~/.bashrc
+  fi
+  export AZURE_DEVOPS_EXT_PAT="$AZDO_PAT"
 
-    echo "Verifying Azure DevOps connection..."
-    if az repos list --output table 2>/dev/null; then
-        echo "Azure DevOps connection successful"
-    else
-        echo "WARNING: Could not connect to Azure DevOps. Check PAT and URL."
-    fi
+  echo "Verifying Azure DevOps connection..."
+  if az repos list --output table 2>/dev/null; then
+    echo "Azure DevOps connection successful"
+  else
+    echo "WARNING: Could not connect to Azure DevOps. Check PAT and URL."
+  fi
 else
-    echo "Skipping Azure DevOps configuration."
+  echo "Skipping Azure DevOps configuration."
 fi
 
 # ------------------------------------------
